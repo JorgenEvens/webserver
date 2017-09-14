@@ -12,6 +12,9 @@ clean:
 run: all
 	./bin/webserver 8188 public
 
+debug: clean
+	gcc -ggdb src/*.c -O2 -o bin/webserver
+
 
 # vim:ft=make
 #

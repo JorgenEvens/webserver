@@ -1,4 +1,6 @@
+#include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 #include "http_connection.h"
 #include "http_request.h"
@@ -31,3 +33,21 @@ void http_utils_echo(struct http_connection* conn) {
 
 }
 
+FILE* http_file_open(char* relpath, char* relativeTo) {
+    int len = strlen(relpath) + strlen(relativeTo) + 3;
+    char path[len];
+    snprintf(path, len, "./%s%s", relativeTo, relpath);
+
+    struct stat pathinfo;
+    if (stat(path, &pathinfo) != 0)
+        return NULL;
+
+    if (S_IFDIR == (pathinfo.st_mode & S_IFDIR)) {
+        len = strlen(relpath) + strlen("/index.html") + 1;
+        char indexPath[len];
+        snprintf(indexPath, len, "%s/index.html", relpath);
+        return http_file_open(indexPath, relativeTo);
+    }
+
+    return fopen(path, "r");
+}

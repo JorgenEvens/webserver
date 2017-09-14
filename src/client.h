@@ -1,7 +1,7 @@
-#include <sys/socket.h>
-
 #ifndef H_CLIENT
 #define H_CLIENT
+
+#include <sys/socket.h>
 
 struct client {
     int fd;

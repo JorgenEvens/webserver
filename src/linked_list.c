@@ -12,15 +12,12 @@ struct linked_list* linked_list_add(struct linked_list* slot, void* item) {
         return add;
 
     struct linked_list* next = slot->next;
-    struct linked_list* prev = slot->prev;
-
-    if (prev != NULL)
-        prev->next = add;
 
     if (next != NULL)
         next->prev = add;
 
-    add->prev = prev;
+    slot->next = add;
+    add->prev = slot;
     add->next = next;
 
     return add;
@@ -44,11 +41,11 @@ int linked_list_free(struct linked_list* slot) {
     struct linked_list* next = slot->next;
     struct linked_list* prev = slot->prev;
 
-    if (next == NULL && prev == NULL)
+    // Cannot release head
+    if (prev == NULL)
         return 0;
 
-    if (prev != NULL)
-        prev->next = next;
+    prev->next = next;
 
     if (next != NULL)
         next->prev = prev;
@@ -73,4 +70,13 @@ struct linked_list* linked_list_select(struct linked_list* list) {
         list = linked_list_add(list, NULL);
 
     return list;
+}
+
+int linked_list_length(struct linked_list* list) {
+    int counter = 0;
+    while(list != NULL) {
+        counter += 1;
+        list = list->next;
+    }
+    return counter;
 }

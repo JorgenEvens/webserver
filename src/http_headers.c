@@ -62,6 +62,10 @@ void http_headers_grow(struct http_headers* headers) {
     if (count > 0)
         memcpy(header_list, headers->headers, sizeof(struct http_header*) * count);
 
+    // free old headers
+    if (headers->headers != NULL)
+        free(headers->headers);
+
     headers->headers = header_list;
     headers->count = next_count;
 }

@@ -1,10 +1,11 @@
+#ifndef H_HTTP_CONNECTION
+#define H_HTTP_CONNECTION
+
 #include <sys/socket.h>
 
 #include "linked_list.h"
 #include "http_request.h"
-
-#ifndef H_HTTP_CONNECTION
-#define H_HTTP_CONNECTION
+#include "http_state.h"
 
 struct http_connection {
     int conn_state;
@@ -12,7 +13,7 @@ struct http_connection {
     struct client* client;
     struct http_request req;
 
-    char* body;
+    struct http_state state;
 };
 
 struct http_connection* http_connection_alloc(struct client* client);

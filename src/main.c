@@ -4,145 +4,139 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <netdb.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "client.h"
 #include "server.h"
 #include "linked_list.h"
+#include "http_state.h"
 #include "http_headers.h"
+#include "http_request.h"
 #include "http_connection.h"
 #include "utils.h"
+#include "file.h"
 #include "http_utils.h"
 
-#define BUF_SIZE 2048
-#define S_METHOD 1
-#define S_PATH 2
-#define S_PROTO 3
-#define S_HEADER_NAME 4
-#define S_HEADER_VALUE 5
-#define S_BODY 6
-#define S_ERR -1
-
-int buf_pushback(char* buf, char* new_head, size_t buf_size) {
-    char* end = buf + buf_size;
-    size_t len = end - new_head;
-
-    memcpy(buf, new_head, len);
-
-    return new_head - buf;
-};
-
-
-void parse_request(struct http_connection* conn) {
-    char data[BUF_SIZE];
-    memset(data, 0, BUF_SIZE);
-
+void respond_file(struct http_connection* conn) {
+    int socket_fd = conn->client->fd;
     struct http_request* req = &conn->req;
 
-    int state = S_METHOD;
-    int socket_fd = conn->client->fd;
-    char* start = data;
-    char* end = data;
-    char* fill = data;
+    FILE* f = (FILE*)conn->state.handler_state;
+    FILE** f_ptr = (FILE**)&conn->state.handler_state;
 
-    while (state != S_BODY && state != S_ERR) {
-        int w_size = (data + BUF_SIZE) - fill;
+    if (f == NULL) {
+        f = http_file_open(req->path, "public");
+        *f_ptr = f;
+        printf("[request] %s %s %s\n", req->method, req->path, req->protocol);
 
-        if (end >= fill) {
-            printf("Filling buffer with %i bytes\n", w_size);
-            int bytes = read(socket_fd, data, w_size);
-            fill += bytes;
+        if (f == NULL) {
+            printf("Failed to open file %s\n", req->path);
+            push_str(socket_fd, "HTTP/1.0 404 Not Found\n\n");
+            conn->state.state = S_ERR;
+        } else {
+            push_str(socket_fd, "HTTP/1.0 200 OK\nConnection: close\n\n");
+        }
+        return;
+    }
+
+    if (feof(f)) {
+        fclose(f);
+        *f_ptr = NULL;
+        conn->state.state = S_FINISHED;
+        return;
+    }
+
+    char buf[1024];
+    memset(buf, 0, sizeof(buf));
+    size_t bytes = fread(buf, sizeof(char), 1024, f);
+
+    if (write(socket_fd, buf, bytes) < 0) {
+        fclose(f);
+        *f_ptr = NULL;
+        conn->state.state = S_ERR;
+        return;
+    }
+}
+
+int select_all_connections(struct linked_list* connections, fd_set* set) {
+    int fd_max = 0;
+    do {
+        struct http_connection* conn = connections->item;
+        connections = connections->next;
+
+        if (conn == NULL)
             continue;
-        }
 
-        if (state == S_METHOD && *end == ' ') {
-            req->method = (char *)malloc(end - start + 1);
-            snprintf(req->method, end - start + 1, "%s", start);
-            fill -= buf_pushback(data, end + 1, BUF_SIZE);
-            start = data;
-            end = start;
-            state = S_PATH;
-        }
+        FD_SET(conn->client->fd, set);
 
-        if (state == S_PATH && *end == ' ') {
-            req->path = (char *)malloc(end - start + 1);
-            snprintf(req->path, end - start + 1, "%s", start);
-            fill -= buf_pushback(data, end + 1, BUF_SIZE);
-            start = data;
-            end = start;
-            state = S_PROTO;
-        }
+        if (conn->client->fd > fd_max)
+            fd_max = conn->client->fd;
 
-        if (state == S_PROTO && (*end == ' ' || *end == '\n')) {
-            req->protocol = (char *)malloc(end - start + 1);
-            snprintf(req->protocol, end - start + 1, "%s", start);
-            fill -= buf_pushback(data, end + 1, BUF_SIZE);
-            start = data;
-            end = start;
-            state = S_HEADER_NAME;
-        }
+    } while(connections != NULL);
 
-        if (state == S_HEADER_NAME && *end == ':') {
-            *end = '\0';
-            start = end + 1;
-            end = start;
-            state = S_HEADER_VALUE;
-        }
-
-        if (state == S_HEADER_NAME && *end == '\n') {
-            state = S_BODY;
-        }
-
-        if (state == S_HEADER_VALUE && *end == '\n') {
-            *end = '\0';
-            http_headers_add(&req->headers, data, start);
-
-            // We currently do not persist these since we have no interest for them
-            /* printf("Found header: %s = %s\n", data, start); */
-            fill -= buf_pushback(data, end + 1, BUF_SIZE);
-            start = data;
-            end = start;
-            state = S_HEADER_NAME;
-        }
-
-        end++;
-    }
+    return fd_max;
 }
 
-FILE* open_file(char* relpath, char* relativeTo) {
-    int len = strlen(relpath) + strlen(relativeTo) + 3;
-    char path[len];
-    snprintf(path, len, "./%s%s", relativeTo, relpath);
+void select_handle_read(struct linked_list* connections, fd_set* set) {
+    do {
+        struct http_connection* conn = connections->item;
+        connections = connections->next;
 
-    struct stat pathinfo;
-    if (stat(path, &pathinfo) != 0)
-        return NULL;
+        if (conn == NULL)
+            continue;
 
-    if (S_IFDIR == (pathinfo.st_mode & S_IFDIR)) {
-        len = strlen(relpath) + strlen("/index.html") + 1;
-        char indexPath[len];
-        snprintf(indexPath, len, "%s/index.html", relpath);
-        return open_file(indexPath, relativeTo);
-    }
+        state_t s = conn->state.state;
+        if (s == S_BODY || s == S_ERR)
+            continue;
 
-    return fopen(path, "r");
+        if (!FD_ISSET(conn->client->fd, set))
+            continue;
+
+        http_request_parse(conn->client, conn);
+    } while (connections != NULL);
 }
 
-void pipe_file(int out_fd, FILE* fd) {
-    char buf[4096];
+void select_handle_write(struct linked_list* connections, fd_set* set) {
+    do {
+        struct http_connection* conn = connections->item;
+        struct linked_list* slot = connections;
+        connections = connections->next;
 
-    size_t size = sizeof(char);
-    int count = sizeof(buf) / size;
+        if (conn == NULL)
+            continue;
 
-    while (feof(fd) == 0) {
-        size_t bytes = fread(buf, size, count, fd);
+        state_t s = conn->state.state;
+        if ((s != S_BODY && s != S_FINISHED) || s == S_ERR)
+            continue;
 
-        write(out_fd, buf, bytes);
-    }
+        int socket_fd = conn->client->fd;
+        if (!FD_ISSET(socket_fd, set))
+            continue;
+
+        struct http_request* req = &conn->req;
+
+        if (strcmp(req->path,"/echo") == 0) {
+            http_utils_echo(conn);
+            conn->state.state = S_FINISHED;
+        } else {
+            respond_file(conn);
+        }
+
+        if (conn->state.state == S_FINISHED || conn->state.state == S_ERR) {
+            char* end_seq = "\n\n";
+            write(socket_fd, end_seq, strlen(end_seq));
+            close(socket_fd);
+
+            http_connection_release(slot);
+            // TODO: memory leak here
+            linked_list_free(slot);
+        }
+    } while (connections != NULL);
 }
-
 
 int main(int argc, char** argv) {
     printf("Program received %i arguments\n", argc);
@@ -152,49 +146,70 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Disable signals on failed socket writes
+    signal(SIGPIPE, SIG_IGN);
+
     int server_fd = server_listen(argv[1], NULL);
 
     printf("Listening with FD %i\n", server_fd);
 
+    fd_set fd_read;
+    fd_set fd_write;
+
     struct linked_list* connections = linked_list_select(NULL);
     struct http_connection* conn = NULL;
     struct linked_list* slot = NULL;
-    int socket_fd = -1;
+
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+
+    int counter = 0;
 
     while (1) {
-        slot = http_connection_accept(server_fd, connections);
-        conn = slot->item;
-        socket_fd = conn->client->fd;
+        FD_ZERO(&fd_read);
+        FD_ZERO(&fd_write);
 
-        printf("Received connection\n");
+        // enable monitoring on connections
+        FD_SET(server_fd, &fd_read);
+        select_all_connections(connections, &fd_read);
+        int fd_max = select_all_connections(connections, &fd_write);
 
-        parse_request(conn);
-        struct http_request* req = &conn->req;
+        if (server_fd > fd_max)
+            fd_max = server_fd;
 
-        printf("%s %s %s\n", req->method, req->path, req->protocol);
+        int ret = select(fd_max + 1, &fd_read, &fd_write, NULL, &tv);
 
-        if (strcmp(req->path,"/echo") == 0) {
-            http_utils_echo(conn);
-        } else {
-            FILE* f = open_file(req->path, argv[2]);
-
-            if (f == NULL) {
-                printf("Failed to open file %s\n", req->path);
-                push_str(socket_fd, "HTTP/1.0 404 Not Found\n\n");
-            } else {
-                printf("Piping file %s\n", req->path);
-                push_str(socket_fd, "HTTP/1.0 200 OK\nConnection: close\n\n");
-                pipe_file(socket_fd, f);
-                fclose(f);
-            }
+        if (ret < 0) {
+            printf("Error in select()\n");
+            continue;
         }
 
+        if (ret == 0) {
+            printf("No data available\n");
+            counter++;
 
-        char* end_seq = "\n\n";
-        write(socket_fd, end_seq, strlen(end_seq));
+            if (counter > 1)
+                break;
+            continue;
+        }
 
-        http_connection_release(slot);
+        counter = 0;
+
+        if (FD_ISSET(server_fd, &fd_read)) {
+            printf("Connection available %i\n", linked_list_length(connections));
+            slot = http_connection_accept(server_fd, connections);
+            conn = slot->item;
+            http_state_init(&conn->state);
+            continue;
+        }
+
+        select_handle_read(connections, &fd_read);
+        select_handle_write(connections, &fd_write);
     }
+
+    close(server_fd);
+    free(connections);
 
     return 0;
 }
