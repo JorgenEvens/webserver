@@ -21,6 +21,8 @@
 #include "file.h"
 #include "http_utils.h"
 
+char* public_directory = "public";
+
 void respond_file(struct http_connection* conn) {
     int socket_fd = conn->client->fd;
     struct http_request* req = &conn->req;
@@ -29,7 +31,7 @@ void respond_file(struct http_connection* conn) {
     FILE** f_ptr = (FILE**)&conn->state.handler_state;
 
     if (f == NULL) {
-        f = http_file_open(req->path, "public");
+        f = http_file_open(req->path, public_directory);
         *f_ptr = f;
         printf("[request] %s %s %s\n", req->method, req->path, req->protocol);
 
@@ -150,6 +152,7 @@ int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
 
     int server_fd = server_listen(argv[1], NULL);
+    public_directory = argv[2];
 
     printf("Listening with FD %i\n", server_fd);
 
