@@ -167,8 +167,6 @@ int main(int argc, char** argv) {
     tv.tv_sec = 5;
     tv.tv_usec = 0;
 
-    int counter = 0;
-
     while (1) {
         FD_ZERO(&fd_read);
         FD_ZERO(&fd_write);
@@ -189,15 +187,8 @@ int main(int argc, char** argv) {
         }
 
         if (ret == 0) {
-            printf("No data available\n");
-            counter++;
-
-            if (counter > 1)
-                break;
             continue;
         }
-
-        counter = 0;
 
         if (FD_ISSET(server_fd, &fd_read)) {
             printf("Connection available %i\n", linked_list_length(connections));
