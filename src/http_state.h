@@ -3,6 +3,8 @@
 
 #define HTTP_STATE_BUF_SIZE 4096
 
+struct http_connection;
+
 typedef enum {
     S_METHOD,
     S_PATH,
@@ -20,6 +22,7 @@ struct http_state {
     char* head;
     char* tail;
     char buffer[HTTP_STATE_BUF_SIZE];
+    void (*handler)(struct http_connection* conn);
     void* handler_state;
 };
 

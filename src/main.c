@@ -23,6 +23,11 @@
 
 char* public_directory = "public";
 
+void respond_echo(struct http_connection* conn) {
+    http_utils_echo(conn);
+    conn->state.state = S_FINISHED;
+}
+
 void respond_file(struct http_connection* conn) {
     int socket_fd = conn->client->fd;
     struct http_request* req = &conn->req;
@@ -102,6 +107,30 @@ void select_handle_read(struct linked_list* connections, fd_set* set) {
     } while (connections != NULL);
 }
 
+void set_handler(struct linked_list* connections) {
+    do {
+        struct http_connection* conn = connections->item;
+        connections = connections->next;
+
+        if (conn == NULL)
+            continue;
+
+        if (conn->state.handler != NULL)
+            continue;
+
+        state_t s = conn->state.state;
+        if ((s != S_BODY && s != S_FINISHED) || s == S_ERR)
+            continue;
+
+        struct http_request* req = &conn->req;
+        if (strcmp(req->path,"/echo") == 0)
+            conn->state.handler = &respond_echo;
+        else
+            conn->state.handler = &respond_file;
+
+    } while (connections != NULL);
+}
+
 void select_handle_write(struct linked_list* connections, fd_set* set) {
     do {
         struct http_connection* conn = connections->item;
@@ -121,12 +150,7 @@ void select_handle_write(struct linked_list* connections, fd_set* set) {
 
         struct http_request* req = &conn->req;
 
-        if (strcmp(req->path,"/echo") == 0) {
-            http_utils_echo(conn);
-            conn->state.state = S_FINISHED;
-        } else {
-            respond_file(conn);
-        }
+        conn->state.handler(conn);
 
         if (conn->state.state == S_FINISHED || conn->state.state == S_ERR) {
             char* end_seq = "\n\n";
@@ -199,6 +223,7 @@ int main(int argc, char** argv) {
         }
 
         select_handle_read(connections, &fd_read);
+        set_handler(connections);
         select_handle_write(connections, &fd_write);
     }
 

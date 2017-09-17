@@ -8,4 +8,6 @@ void http_state_init(struct http_state* state) {
     state->size = HTTP_STATE_BUF_SIZE;
     state->head = state->buffer;
     state->tail = state->buffer;
+    state->handler = NULL;
+    state->handler_state = NULL;
 }
