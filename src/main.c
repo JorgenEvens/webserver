@@ -20,6 +20,7 @@
 #include "utils.h"
 #include "file.h"
 #include "http_utils.h"
+#include "http_route.h"
 
 char* public_directory = "public";
 
@@ -122,11 +123,8 @@ void set_handler(struct linked_list* connections) {
         if ((s != S_BODY && s != S_FINISHED) || s == S_ERR)
             continue;
 
-        struct http_request* req = &conn->req;
-        if (strcmp(req->path,"/echo") == 0)
-            conn->state.handler = &respond_echo;
-        else
-            conn->state.handler = &respond_file;
+        http_route_set(conn, "/echo", &respond_echo);
+        http_route_default(conn, &respond_file);
 
     } while (connections != NULL);
 }
@@ -148,8 +146,6 @@ void select_handle_write(struct linked_list* connections, fd_set* set) {
         if (!FD_ISSET(socket_fd, set))
             continue;
 
-        struct http_request* req = &conn->req;
-
         conn->state.handler(conn);
 
         if (conn->state.state == S_FINISHED || conn->state.state == S_ERR) {
@@ -158,7 +154,6 @@ void select_handle_write(struct linked_list* connections, fd_set* set) {
             close(socket_fd);
 
             http_connection_release(slot);
-            // TODO: memory leak here
             linked_list_free(slot);
         }
     } while (connections != NULL);
